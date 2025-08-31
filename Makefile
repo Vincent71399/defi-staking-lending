@@ -15,3 +15,4 @@ build:; forge build
 install:
 	@forge install OpenZeppelin/openzeppelin-contracts
 	@forge install foundry-rs/forge-std
+	@forge install smartcontractkit/chainlink-brownie-contracts
