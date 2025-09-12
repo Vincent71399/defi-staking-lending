@@ -30,13 +30,6 @@ jobs:
           forge fmt --check
         id: fmt
 
-      - name: Install project dependencies
-        env:
-          # maps GitHub secrets into environment vars
-          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
-          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
-        run: make install
-
       - name: Run Forge build
         run: |
           forge build --sizes
