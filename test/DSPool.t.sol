@@ -105,7 +105,6 @@ contract DSPoolTest is Test {
         dsPool.mintDSC(mintAmount);
 
         uint256 dscBalance = dsc.balanceOf(user1);
-        console.log("DSC Balance of User1: ", dscBalance);
         assert(dscBalance == mintAmount);
     }
 
@@ -130,7 +129,6 @@ contract DSPoolTest is Test {
         dsc.approve(address(dsPool), burnAmount);
         dsPool.burnDSC(burnAmount);
         uint256 dscBalance = dsc.balanceOf(user1);
-        console.log("DSC Balance of User1: ", dscBalance);
         assert(dscBalance == maxDSC - burnAmount);
         vm.stopPrank();
     }
@@ -164,17 +162,52 @@ contract DSPoolTest is Test {
         assert(dscBalance == amountDSCMint);
     }
 
+    function testRedeem(uint256 amountToRedeem) public depositOneEth(user1) {
+        uint256 initialCollateral = dsPool.getUserCollateralDeposited(user1, weth);
+        amountToRedeem = bound(amountToRedeem, 1, initialCollateral);
+        vm.startPrank(user1);
+        dsPool.redeemCollateral(weth, amountToRedeem);
+        vm.stopPrank();
+        uint256 newCollateral = dsPool.getUserCollateralDeposited(user1, weth);
+        assert(newCollateral == initialCollateral - amountToRedeem);
+    }
+
+    function testRedeemExceedBalance() public depositOneEth(user1) {
+        uint256 initialCollateral = dsPool.getUserCollateralDeposited(user1, weth);
+        uint256 amountToRedeem = initialCollateral + 1;
+        vm.startPrank(user1);
+        vm.expectRevert();
+        dsPool.redeemCollateral(weth, amountToRedeem);
+        vm.stopPrank();
+    }
+
     // test price drop and liquidation
     function testPriceDrop() public depositOneEth(user1) {
         uint256 initValue = dsPool._calculateUserTotalCollateralValue(user1);
         console.log("Total Collateral Value of User1 in USD: ", initValue);
+        uint256 dscToMint = dsPool.getMaxDSCUserCanMint(user1);
+
+        vm.prank(user1);
+        dsPool.mintDSC(dscToMint);
+
+        uint256 initHealthFactor = dsPool.getHealthFactor(user1);
+        console.log("Initial Health Factor of User1: ", initHealthFactor);
+        bool isLiquidatable = dsPool.isLiquidatable(user1);
+        console.log("Is User1 Liquidatable? ", isLiquidatable);
         int256 currentETHPrice = ethUsdPriceFeed.getSimplePrice();
         console.log("Current ETH Price: ", currentETHPrice);
+        // drop price by 20%
         currentETHPrice = currentETHPrice * 80 / 100;
         MockV3Aggregator(ethUsdPriceFeed).updateAnswer(currentETHPrice);
         uint256 newValue = dsPool._calculateUserTotalCollateralValue(user1);
         console.log("Total Collateral Value of User1 in USD: ", newValue);
         assertApproxEqAbs(newValue, initValue * 80 / 100, 2);
+        uint256 newHealthFactor = dsPool.getHealthFactor(user1);
+        console.log("New Health Factor of User1: ", newHealthFactor);
+        isLiquidatable = dsPool.isLiquidatable(user1);
+        console.log("Is User1 Liquidatable? ", isLiquidatable);
+        uint256 user1Debt = dsPool.getUserDebt(user1);
+        console.log("User1 Debt: ", user1Debt);
     }
 
 

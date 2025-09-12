@@ -16,7 +16,7 @@ contract DSPool is ReentrancyGuard {
     error DSPool__TokenAddressesAndPriceFeedAddressesAmountsDontMatch();
     error DSPool__NeedsMoreThanZero();
     error DSPool__TokenNotAllowed(address token);
-    error DSPool__TokenReceiveFailed();
+    error DSPool__TokenTransferFailed();
     error DSPool__HealthFactorTooLow();
     error DSPool__BurnAmountExceedsBalance();
 
@@ -24,6 +24,9 @@ contract DSPool is ReentrancyGuard {
     // Events
     ///////////////////
     event CollateralDeposited(address indexed user, address indexed token, uint256 indexed amount);
+    event CollateralRedeemed(address indexed user, address indexed token, uint256 indexed amount);
+    event DSCMinted(address indexed user, uint256 indexed amount);
+    event DSCBurned(address indexed user, uint256 indexed amount);
 
     ///////////////////
     // State Variables
@@ -102,25 +105,48 @@ contract DSPool is ReentrancyGuard {
         IERC20 tokenCollateral = IERC20(tokenCollateralAddress);
         bool success = tokenCollateral.transferFrom(msg.sender, address(this), amountCollateral);
         if(!success){
-            revert DSPool__TokenReceiveFailed();
+            revert DSPool__TokenTransferFailed();
+        }
+    }
+
+    function redeemCollateralAndBurnDSC(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountDscToBurn
+    ) external {
+        burnDSC(amountDscToBurn);
+        redeemCollateral(tokenCollateralAddress, amountCollateral);
+    }
+
+    function redeemCollateral(
+        address tokenCollateralAddress,
+        uint256 amountCollateral
+    ) public nonReentrant isAllowedToken(tokenCollateralAddress) moreThanZero(amountCollateral) {
+        s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
+        _revertIfHealthFactorIsBroken(msg.sender);
+        emit CollateralRedeemed(msg.sender, tokenCollateralAddress, amountCollateral);
+        IERC20 tokenCollateral = IERC20(tokenCollateralAddress);
+        bool success = tokenCollateral.transfer(msg.sender, amountCollateral);
+        if(!success){
+            revert DSPool__TokenTransferFailed();
         }
     }
 
     function mintDSC(uint256 amountDscToMint) public moreThanZero(amountDscToMint) {
         s_DSCMinted[msg.sender] += amountDscToMint;
-        if(_healthFactor(msg.sender) < MIN_HEALTH_FACTOR){
-            revert DSPool__HealthFactorTooLow();
-        }
+        _revertIfHealthFactorIsBroken(msg.sender);
         i_dsc.mint(msg.sender, amountDscToMint);
     }
 
-    function burnDSC(uint256 amountDscToBurn) external moreThanZero(amountDscToBurn) {
+    function burnDSC(uint256 amountDscToBurn) public moreThanZero(amountDscToBurn) {
         if(i_dsc.balanceOf(msg.sender) < amountDscToBurn){
             revert DSPool__BurnAmountExceedsBalance();
         }
         s_DSCMinted[msg.sender] -= amountDscToBurn;
         i_dsc.burnFrom(msg.sender, amountDscToBurn);
     }
+
+
 
     ///////////////////
     // Private Functions
@@ -167,6 +193,12 @@ contract DSPool is ReentrancyGuard {
         return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
     }
 
+    function _revertIfHealthFactorIsBroken(address user) internal view {
+        if(_healthFactor(user) < MIN_HEALTH_FACTOR){
+            revert DSPool__HealthFactorTooLow();
+        }
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     // External & Public View & Pure Functions
     ////////////////////////////////////////////////////////////////////////////
@@ -174,12 +206,28 @@ contract DSPool is ReentrancyGuard {
         return _calculateUserTotalCollateralValue(user);
     }
 
-    function getMaxDSCUserCanMint(address user) external view returns (uint256) {
+    function getUserCollateralDeposited(address user, address token) external isAllowedToken(token) view returns (uint256) {
+        return s_collateralDeposited[user][token];
+    }
+
+    function getMaxDSCUserCanMint(address user) public view returns (uint256) {
         uint256 collateralValueInUsd = _calculateUserTotalCollateralValue(user);
         return (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
     }
 
     function getHealthFactor(address user) external view returns (uint256) {
         return _healthFactor(user);
+    }
+
+    function isLiquidatable(address user) public view returns (bool) {
+        return _healthFactor(user) < MIN_HEALTH_FACTOR;
+    }
+
+    function getUserDebt(address user) public view returns (uint256) {
+        if(isLiquidatable(user)){
+            return s_DSCMinted[user] - getMaxDSCUserCanMint(user);
+        }else{
+            return 0;
+        }
     }
 }
