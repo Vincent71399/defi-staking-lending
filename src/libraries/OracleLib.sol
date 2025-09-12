@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.26;
 
-import { AggregatorV3Interface } from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 library OracleLib {
     error OracleLib__StalePrice();
@@ -15,7 +15,7 @@ library OracleLib {
     {
         AggregatorV3Interface chainlinkFeed = AggregatorV3Interface(chainlinkFeedAddress);
         (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
-                            chainlinkFeed.latestRoundData();
+            chainlinkFeed.latestRoundData();
 
         uint8 decimals = chainlinkFeed.decimals();
 
@@ -29,7 +29,7 @@ library OracleLib {
     }
 
     function getSimplePrice(address chainlinkFeedAddress) public view returns (int256) {
-        (, int256 answer, , , , ) = getPrice(chainlinkFeedAddress);
+        (, int256 answer,,,,) = getPrice(chainlinkFeedAddress);
         return answer;
     }
 }

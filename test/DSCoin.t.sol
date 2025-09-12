@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.26;
 
-import { Test, console } from "forge-std/Test.sol";
-import { DSCoin } from "../src/DSCoin.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-
+import {Test, console} from "forge-std/Test.sol";
+import {DSCoin} from "../src/DSCoin.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract DSCoinTest is Test {
-
     DSCoin internal dsc;
     address internal owner = makeAddr("owner");
     address internal user1 = makeAddr("user1");

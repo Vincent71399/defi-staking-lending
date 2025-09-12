@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.26;
 
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { DSCoin } from "./DSCoin.sol";
-import { OracleLib } from "./libraries/OracleLib.sol";
-import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {DSCoin} from "./DSCoin.sol";
+import {OracleLib} from "./libraries/OracleLib.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract DSPool is ReentrancyGuard {
     using OracleLib for address;
     ///////////////////
     // Errors
     ///////////////////
+
     error DSPool__TokenAddressesAndPriceFeedAddressesNeedToBeGreaterThanZero();
     error DSPool__TokenAddressesAndPriceFeedAddressesAmountsDontMatch();
     error DSPool__NeedsMoreThanZero();
@@ -43,20 +43,19 @@ contract DSPool is ReentrancyGuard {
     mapping(address user => uint256 amount) private s_DSCMinted;
     DSCoin private immutable i_dsc;
 
-
     ///////////////////
     // Constructor
     ///////////////////
-    constructor(address[] memory tokenAddresses, address[] memory priceFeedAddresses, address dscAddress){
-        if(tokenAddresses.length == 0 || priceFeedAddresses.length == 0){
+    constructor(address[] memory tokenAddresses, address[] memory priceFeedAddresses, address dscAddress) {
+        if (tokenAddresses.length == 0 || priceFeedAddresses.length == 0) {
             revert DSPool__TokenAddressesAndPriceFeedAddressesNeedToBeGreaterThanZero();
         }
-        if(tokenAddresses.length != priceFeedAddresses.length){
+        if (tokenAddresses.length != priceFeedAddresses.length) {
             revert DSPool__TokenAddressesAndPriceFeedAddressesAmountsDontMatch();
         }
 
         s_collateralTokens = tokenAddresses;
-        for(uint i = 0; i < tokenAddresses.length; i++){
+        for (uint256 i = 0; i < tokenAddresses.length; i++) {
             s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
         }
         i_dsc = DSCoin(dscAddress);
@@ -91,10 +90,8 @@ contract DSPool is ReentrancyGuard {
         mintDSC(amountDscToMint);
     }
 
-    function depositCollateral(
-        address tokenCollateralAddress,
-        uint256 amountCollateral
-    ) public
+    function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+        public
         nonReentrant
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateralAddress)
@@ -104,7 +101,7 @@ contract DSPool is ReentrancyGuard {
         // Transfer in the collateral
         IERC20 tokenCollateral = IERC20(tokenCollateralAddress);
         bool success = tokenCollateral.transferFrom(msg.sender, address(this), amountCollateral);
-        if(!success){
+        if (!success) {
             revert DSPool__TokenTransferFailed();
         }
     }
@@ -118,16 +115,18 @@ contract DSPool is ReentrancyGuard {
         redeemCollateral(tokenCollateralAddress, amountCollateral);
     }
 
-    function redeemCollateral(
-        address tokenCollateralAddress,
-        uint256 amountCollateral
-    ) public nonReentrant isAllowedToken(tokenCollateralAddress) moreThanZero(amountCollateral) {
+    function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral)
+        public
+        nonReentrant
+        isAllowedToken(tokenCollateralAddress)
+        moreThanZero(amountCollateral)
+    {
         s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
         _revertIfHealthFactorIsBroken(msg.sender);
         emit CollateralRedeemed(msg.sender, tokenCollateralAddress, amountCollateral);
         IERC20 tokenCollateral = IERC20(tokenCollateralAddress);
         bool success = tokenCollateral.transfer(msg.sender, amountCollateral);
-        if(!success){
+        if (!success) {
             revert DSPool__TokenTransferFailed();
         }
     }
@@ -139,29 +138,31 @@ contract DSPool is ReentrancyGuard {
     }
 
     function burnDSC(uint256 amountDscToBurn) public moreThanZero(amountDscToBurn) {
-        if(i_dsc.balanceOf(msg.sender) < amountDscToBurn){
+        if (i_dsc.balanceOf(msg.sender) < amountDscToBurn) {
             revert DSPool__BurnAmountExceedsBalance();
         }
         s_DSCMinted[msg.sender] -= amountDscToBurn;
         i_dsc.burnFrom(msg.sender, amountDscToBurn);
     }
 
-
-
     ///////////////////
     // Private Functions
     ///////////////////
-    function _calculateUserTotalCollateralValue(address user) public view returns(uint256 totalUserCollateralValueInUsd){
+    function _calculateUserTotalCollateralValue(address user)
+        public
+        view
+        returns (uint256 totalUserCollateralValueInUsd)
+    {
         totalUserCollateralValueInUsd = 0;
         address[] memory collateralTokens = s_collateralTokens;
         // Loop through each collateral token
-        for(uint i = 0; i < collateralTokens.length; i++){
+        for (uint256 i = 0; i < collateralTokens.length; i++) {
             address token = collateralTokens[i];
             uint256 amount = s_collateralDeposited[user][token];
-            if(amount > 0){
+            if (amount > 0) {
                 // Get the price of the token
                 address priceFeedAddress = s_priceFeeds[token];
-                (, int256 price,,,,uint8 decimal) = priceFeedAddress.getPrice();
+                (, int256 price,,,, uint8 decimal) = priceFeedAddress.getPrice();
                 uint256 adjustedPrice = uint256(price);
                 uint256 valueInUsd = (amount * adjustedPrice) / 10 ** decimal;
                 totalUserCollateralValueInUsd += valueInUsd;
@@ -169,15 +170,16 @@ contract DSPool is ReentrancyGuard {
         }
     }
 
-    function _getAccountInformation(address user) private view returns (uint256 totalDscMinted, uint256 collateralValueInUsd) {
+    function _getAccountInformation(address user)
+        private
+        view
+        returns (uint256 totalDscMinted, uint256 collateralValueInUsd)
+    {
         totalDscMinted = s_DSCMinted[user];
         collateralValueInUsd = _calculateUserTotalCollateralValue(user);
     }
 
-    function _calculateHealthFactor(
-        uint256 totalDscMinted,
-        uint256 collateralValueInUsd
-    )
+    function _calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd)
         internal
         pure
         returns (uint256)
@@ -194,7 +196,7 @@ contract DSPool is ReentrancyGuard {
     }
 
     function _revertIfHealthFactorIsBroken(address user) internal view {
-        if(_healthFactor(user) < MIN_HEALTH_FACTOR){
+        if (_healthFactor(user) < MIN_HEALTH_FACTOR) {
             revert DSPool__HealthFactorTooLow();
         }
     }
@@ -206,7 +208,12 @@ contract DSPool is ReentrancyGuard {
         return _calculateUserTotalCollateralValue(user);
     }
 
-    function getUserCollateralDeposited(address user, address token) external isAllowedToken(token) view returns (uint256) {
+    function getUserCollateralDeposited(address user, address token)
+        external
+        view
+        isAllowedToken(token)
+        returns (uint256)
+    {
         return s_collateralDeposited[user][token];
     }
 
@@ -224,9 +231,9 @@ contract DSPool is ReentrancyGuard {
     }
 
     function getUserDebt(address user) public view returns (uint256) {
-        if(isLiquidatable(user)){
+        if (isLiquidatable(user)) {
             return s_DSCMinted[user] - getMaxDSCUserCanMint(user);
-        }else{
+        } else {
             return 0;
         }
     }

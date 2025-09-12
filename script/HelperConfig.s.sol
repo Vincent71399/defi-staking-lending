@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.10;
 
-import { Script } from "forge-std/Script.sol";
-import { MockV3Aggregator } from "../test/mocks/MockV3Aggregator.sol";
-import { MockToken } from "../test/mocks/MockToken.sol";
-import { MockTokenD8 } from "../test/mocks/MockTokenD8.sol";
-
+import {Script} from "forge-std/Script.sol";
+import {MockV3Aggregator} from "../test/mocks/MockV3Aggregator.sol";
+import {MockToken} from "../test/mocks/MockToken.sol";
+import {MockTokenD8} from "../test/mocks/MockTokenD8.sol";
 
 contract HelperConfig is Script {
     error HelperConfig__UnSupportedChain();
@@ -32,14 +31,14 @@ contract HelperConfig is Script {
     constructor() {
         if (block.chainid == SEPOLIA_CHAIN_ID) {
             activeNetworkConfig = getSepoliaEthConfig();
-        }else if(block.chainid == ANVIL_CHAIN_ID){
+        } else if (block.chainid == ANVIL_CHAIN_ID) {
             activeNetworkConfig = getOrCreateAnvilEthConfig();
-        }else{
+        } else {
             revert HelperConfig__UnSupportedChain();
         }
     }
 
-    function getSepoliaEthConfig() public pure returns (NetworkConfig memory sepoliaNetworkConfig){
+    function getSepoliaEthConfig() public pure returns (NetworkConfig memory sepoliaNetworkConfig) {
         string[] memory names = new string[](3);
         names[0] = "WETH/USD";
         names[1] = "WBTC/USD";
@@ -55,18 +54,15 @@ contract HelperConfig is Script {
         tokenAddresses[1] = WBTC_SEPOLIA;
         tokenAddresses[2] = LINK_SEPOLIA;
 
-        sepoliaNetworkConfig = NetworkConfig({
-            tokenNames: names,
-            priceFeedAddresses: priceFeedAddresses,
-            tokenAddresses: tokenAddresses
-        });
+        sepoliaNetworkConfig =
+            NetworkConfig({tokenNames: names, priceFeedAddresses: priceFeedAddresses, tokenAddresses: tokenAddresses});
     }
 
-    function getOrCreateAnvilEthConfig() public returns (NetworkConfig memory anvilNetworkConfig){
+    function getOrCreateAnvilEthConfig() public returns (NetworkConfig memory anvilNetworkConfig) {
         // Check to see if we set an active network config
         if (activeNetworkConfig.priceFeedAddresses.length != 0 && activeNetworkConfig.tokenAddresses.length != 0) {
             anvilNetworkConfig = activeNetworkConfig;
-        }else{
+        } else {
             vm.startBroadcast();
             MockToken weth = new MockToken("WETH", "WETH");
             MockTokenD8 wbtc = new MockTokenD8("WBTC", "WBTC");

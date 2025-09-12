@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.26;
 
-import { Test, console } from "forge-std/Test.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { DSPool } from "../src/DSPool.sol";
-import { DSCoin } from "../src/DSCoin.sol";
-import { OracleLib } from "../src/libraries/OracleLib.sol";
-import { HelperConfig } from "../script/HelperConfig.s.sol";
-import { MockToken } from "./mocks/MockToken.sol";
-import { MockV3Aggregator } from "./mocks/MockV3Aggregator.sol";
-
+import {Test, console} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {DSPool} from "../src/DSPool.sol";
+import {DSCoin} from "../src/DSCoin.sol";
+import {OracleLib} from "../src/libraries/OracleLib.sol";
+import {HelperConfig} from "../script/HelperConfig.s.sol";
+import {MockToken} from "./mocks/MockToken.sol";
+import {MockV3Aggregator} from "./mocks/MockV3Aggregator.sol";
 
 contract DSPoolTest is Test {
     using OracleLib for address;
@@ -54,7 +53,7 @@ contract DSPoolTest is Test {
 
     function _initCollateral(address user) private {
         address[] memory tokens = helperConfig.getTokens();
-        for(uint i = 0; i < tokens.length; i++){
+        for (uint256 i = 0; i < tokens.length; i++) {
             MockToken token = MockToken(tokens[i]);
             uint256 amount = 10 ** token.decimals();
             token.mint(user, amount);
@@ -63,7 +62,7 @@ contract DSPoolTest is Test {
 
     modifier depositAllCollateral(address user) {
         address[] memory tokens = helperConfig.getTokens();
-        for(uint i = 0; i < tokens.length; i++){
+        for (uint256 i = 0; i < tokens.length; i++) {
             vm.startPrank(user);
             uint256 amount = IERC20(tokens[i]).balanceOf(user1);
             IERC20(tokens[i]).approve(address(dsPool), amount);
@@ -209,6 +208,4 @@ contract DSPoolTest is Test {
         uint256 user1Debt = dsPool.getUserDebt(user1);
         console.log("User1 Debt: ", user1Debt);
     }
-
-
 }
