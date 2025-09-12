@@ -1,4 +1,4 @@
-include .env
+-include .env
 
 all: clean remove install update build
 
