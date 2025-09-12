@@ -30,9 +30,6 @@ jobs:
           forge fmt --check
         id: fmt
 
-      - name: Install project dependencies (make install)
-        run: make install
-
       - name: Run Forge build
         run: |
           forge build --sizes
