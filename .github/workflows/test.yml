@@ -25,17 +25,6 @@ jobs:
         run: |
           forge --version
 
-      - name: Show Foundry config + remappings
-        run: |
-          echo "== foundry.toml =="
-          cat foundry.toml || true
-          echo "== forge config (effective) =="
-          forge config
-          echo "== forge remappings (effective) =="
-          forge remappings || true
-          echo "== lib tree =="
-          ls -la lib || true    
-
       - name: Run Forge fmt
         run: |
           forge fmt --check
