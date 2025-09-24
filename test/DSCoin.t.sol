@@ -50,5 +50,4 @@ contract DSCoinTest is Test {
         console.log("User1 Balance after burn: ", user1Balance);
         assertEq(user1Balance, 500 ether);
     }
-    
 }

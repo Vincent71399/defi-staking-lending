@@ -130,11 +130,7 @@ contract DSPool is ReentrancyGuard {
         address tokenCollateralAddress,
         uint256 amountCollateral,
         uint256 amountDscToBurn
-    ) external
-        nonReentrant
-        isAllowedToken(tokenCollateralAddress)
-        moreThanZero(amountCollateral)
-    {
+    ) external nonReentrant isAllowedToken(tokenCollateralAddress) moreThanZero(amountCollateral) {
         _burnDSC(amountDscToBurn, msg.sender, msg.sender);
         _redeemCollateral(tokenCollateralAddress, amountCollateral, msg.sender, msg.sender);
         _revertIfHealthFactorIsBroken(msg.sender);
@@ -182,23 +178,20 @@ contract DSPool is ReentrancyGuard {
      * @notice: A known bug would be if the protocol was only 100% collateralized, we wouldn't be able to liquidate anyone.
      * For example, if the price of the collateral plummeted before anyone could be liquidated.
      */
-    function liquidate(
-        address collateral,
-        address user,
-        uint256 debtToCover
-    ) external
+    function liquidate(address collateral, address user, uint256 debtToCover)
+        external
         isAllowedToken(collateral)
         moreThanZero(debtToCover)
         nonReentrant
     {
         uint256 startingUserHealthFactor = _healthFactor(user);
-        if(startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+        if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
             revert DSPool__UserNotLiquidatable();
         }
 
         // liquidator can only cover as much debt as the user has
         uint256 totalDscMintedByUser = s_DSCMinted[user];
-        if(debtToCover > totalDscMintedByUser) {
+        if (debtToCover > totalDscMintedByUser) {
             debtToCover = totalDscMintedByUser;
         }
 
@@ -208,7 +201,7 @@ contract DSPool is ReentrancyGuard {
         uint256 totalCollateralToRedeem = collateralEquivalent + bonusCollateral;
 
         _redeemCollateral(collateral, totalCollateralToRedeem, user, msg.sender);
-        _burnDSC(debtToCover, user,msg.sender);
+        _burnDSC(debtToCover, user, msg.sender);
 
         uint256 endingUserHealthFactor = _healthFactor(user);
         // In some scenarios, the user can be liquidated but their health factor does not improve, like if they have very little collateral, or the price of the collateral has dropped significantly
@@ -221,7 +214,8 @@ contract DSPool is ReentrancyGuard {
     ///////////////////
     // Private Functions
     ///////////////////
-    function _redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral, address from, address to) public
+    function _redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral, address from, address to)
+        public
     {
         s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
         emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
@@ -232,7 +226,10 @@ contract DSPool is ReentrancyGuard {
         }
     }
 
-    function _burnDSC(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) public moreThanZero(amountDscToBurn) {
+    function _burnDSC(uint256 amountDscToBurn, address onBehalfOf, address dscFrom)
+        public
+        moreThanZero(amountDscToBurn)
+    {
         if (i_dsc.balanceOf(dscFrom) < amountDscToBurn) {
             revert DSPool__BurnAmountExceedsBalance();
         }
@@ -257,28 +254,25 @@ contract DSPool is ReentrancyGuard {
                 uint256 tokenDecimal = ERC20(token).decimals();
                 (, int256 price,,,, uint8 priceFeedDecimal) = priceFeedAddress.getPrice();
                 uint256 adjustedPrice = uint256(price);
-                uint256 valueInUsd = (amount * adjustedPrice * (10 ** i_dsc.decimals())) / 10 ** (tokenDecimal + priceFeedDecimal);
+                uint256 valueInUsd =
+                    (amount * adjustedPrice * (10 ** i_dsc.decimals())) / 10 ** (tokenDecimal + priceFeedDecimal);
                 totalUserCollateralValueInDsc += valueInUsd;
             }
         }
     }
 
-//    function _calculateCollateralValueFromToken(address token, uint256 amount)
-//        private
-//        view
-//        returns (uint256)
-//    {
-//        address priceFeedAddress = s_priceFeeds[token];
-//        (, int256 price,,,, uint8 decimal) = priceFeedAddress.getPrice();
-//        uint256 adjustedPrice = uint256(price);
-//        return (amount * adjustedPrice) / 10 ** decimal;
-//    }
+    //    function _calculateCollateralValueFromToken(address token, uint256 amount)
+    //        private
+    //        view
+    //        returns (uint256)
+    //    {
+    //        address priceFeedAddress = s_priceFeeds[token];
+    //        (, int256 price,,,, uint8 decimal) = priceFeedAddress.getPrice();
+    //        uint256 adjustedPrice = uint256(price);
+    //        return (amount * adjustedPrice) / 10 ** decimal;
+    //    }
 
-    function _calculateCollateralAmountFromValue(address token, uint256 valueInUsd)
-        private
-        view
-        returns (uint256)
-    {
+    function _calculateCollateralAmountFromValue(address token, uint256 valueInUsd) private view returns (uint256) {
         address priceFeedAddress = s_priceFeeds[token];
         (, int256 price,,,, uint8 decimal) = priceFeedAddress.getPrice();
         uint256 adjustedPrice = uint256(price);
@@ -346,11 +340,10 @@ contract DSPool is ReentrancyGuard {
     }
 
     function getUserDebt(address user) external view returns (uint256) {
-        if(isLiquidatable(user)){
+        if (isLiquidatable(user)) {
             return s_DSCMinted[user];
-        }else{
+        } else {
             return 0;
         }
     }
-
 }

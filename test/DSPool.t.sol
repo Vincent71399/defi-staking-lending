@@ -285,5 +285,4 @@ contract DSPoolTest is Test {
         assertGt(user2_weth_gained, 0);
         assertEq(user2_weth_gained, user1_init_weth_deposited - user1_final_weth_deposited);
     }
-
 }
