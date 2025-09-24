@@ -28,6 +28,7 @@ contract DSPoolTest is Test {
     address internal owner = makeAddr("owner");
     address internal user1 = makeAddr("user1");
     address internal user2 = makeAddr("user2");
+    address internal user3 = makeAddr("user3");
 
     function setUp() public {
         helperConfig = new HelperConfig();
@@ -49,12 +50,14 @@ contract DSPoolTest is Test {
 
         _initCollateral(user1);
         _initCollateral(user2);
+        _initCollateral(user3);
     }
 
     function _initCollateral(address user) private {
         address[] memory tokens = helperConfig.getTokens();
         for (uint256 i = 0; i < tokens.length; i++) {
             MockToken token = MockToken(tokens[i]);
+            // mint 1 token for each collateral
             uint256 amount = 10 ** token.decimals();
             token.mint(user, amount);
         }
@@ -64,7 +67,7 @@ contract DSPoolTest is Test {
         address[] memory tokens = helperConfig.getTokens();
         for (uint256 i = 0; i < tokens.length; i++) {
             vm.startPrank(user);
-            uint256 amount = IERC20(tokens[i]).balanceOf(user1);
+            uint256 amount = IERC20(tokens[i]).balanceOf(user);
             IERC20(tokens[i]).approve(address(dsPool), amount);
             dsPool.depositCollateral(tokens[i], amount);
             vm.stopPrank();
@@ -95,6 +98,24 @@ contract DSPoolTest is Test {
         assert(totalValue > 0);
         uint256 maxDSC = dsPool.getMaxDSCUserCanMint(user1);
         console.log("Max DSC User1 can mint: ", maxDSC);
+    }
+
+    function testDepositSingleCollateral() public {
+        vm.startPrank(user1);
+        uint256 amount = IERC20(weth).balanceOf(user1);
+        console.log("User1 WETH balance", amount);
+        IERC20(weth).approve(address(dsPool), amount);
+        dsPool.depositCollateral(weth, amount);
+        console.log("User1 total collateral in usd", dsPool.getUserTotalCollateralValueInUSD(user1));
+        vm.stopPrank();
+
+        vm.startPrank(user2);
+        amount = IERC20(wbtc).balanceOf(user2);
+        console.log("User2 WBTC balance", amount);
+        IERC20(wbtc).approve(address(dsPool), amount);
+        dsPool.depositCollateral(wbtc, amount);
+        console.log("User2 total collateral in usd", dsPool.getUserTotalCollateralValueInUSD(user2));
+        vm.stopPrank();
     }
 
     function testMint(uint256 mintAmount) public depositAllCollateral(user1) {
@@ -180,6 +201,23 @@ contract DSPoolTest is Test {
         vm.stopPrank();
     }
 
+    function testRedeemBurnDSCInOneStep() public depositOneEth(user1) {
+        uint256 initialCollateral = dsPool.getUserCollateralDeposited(user1, weth);
+        uint256 dscAmount = dsPool.getMaxDSCUserCanMint(user1);
+        vm.startPrank(user1);
+        dsPool.mintDSC(dscAmount);
+        // redeem all collateral by burning max DSC
+        uint256 initialDSCBalance = dsc.balanceOf(user1);
+        uint256 initialCollateralBalance = IERC20(weth).balanceOf(user1);
+        dsc.approve(address(dsPool), dscAmount);
+        dsPool.redeemCollateralAndBurnDSC(weth, initialCollateral, dscAmount);
+        uint256 newDSCBalance = dsc.balanceOf(user1);
+        uint256 newCollateralBalance = IERC20(weth).balanceOf(user1);
+        assert(newDSCBalance == initialDSCBalance - dscAmount);
+        assert(newCollateralBalance == initialCollateralBalance + initialCollateral);
+        vm.stopPrank();
+    }
+
     // test price drop and liquidation
     function testPriceDrop() public depositOneEth(user1) {
         uint256 initValue = dsPool._calculateUserTotalCollateralValue(user1);
@@ -190,9 +228,9 @@ contract DSPoolTest is Test {
         dsPool.mintDSC(dscToMint);
 
         uint256 initHealthFactor = dsPool.getHealthFactor(user1);
-        console.log("Initial Health Factor of User1: ", initHealthFactor);
-        bool isLiquidatable = dsPool.isLiquidatable(user1);
-        console.log("Is User1 Liquidatable? ", isLiquidatable);
+        console.log("Init Health Factor of User1: ", initHealthFactor);
+        assertFalse(dsPool.isLiquidatable(user1));
+        assertEq(dsPool.getUserDebt(user1), 0);
         int256 currentETHPrice = ethUsdPriceFeed.getSimplePrice();
         console.log("Current ETH Price: ", currentETHPrice);
         // drop price by 20%
@@ -203,9 +241,49 @@ contract DSPoolTest is Test {
         assertApproxEqAbs(newValue, initValue * 80 / 100, 2);
         uint256 newHealthFactor = dsPool.getHealthFactor(user1);
         console.log("New Health Factor of User1: ", newHealthFactor);
-        isLiquidatable = dsPool.isLiquidatable(user1);
-        console.log("Is User1 Liquidatable? ", isLiquidatable);
-        uint256 user1Debt = dsPool.getUserDebt(user1);
-        console.log("User1 Debt: ", user1Debt);
+        assertGt(initHealthFactor, newHealthFactor);
+        assertTrue(dsPool.isLiquidatable(user1));
+        assertGt(dsPool.getUserDebt(user1), 0);
     }
+
+    // test liquidation
+    function testLiquidation() public depositOneEth(user1) depositAllCollateral(user2) {
+        uint256 user1_init_weth_deposited = dsPool.getUserCollateralDeposited(user1, weth);
+        uint256 user2_init_weth = IERC20(weth).balanceOf(user2);
+
+        uint256 dscUser1Mint = dsPool.getMaxDSCUserCanMint(user1);
+        vm.prank(user1);
+        dsPool.mintDSC(dscUser1Mint);
+
+        int256 currentETHPrice = ethUsdPriceFeed.getSimplePrice();
+        // drop price by 20%
+        currentETHPrice = currentETHPrice * 80 / 100;
+        MockV3Aggregator(ethUsdPriceFeed).updateAnswer(currentETHPrice);
+        assertTrue(dsPool.isLiquidatable(user1));
+        console.log("User1's health factor before liquidation: ", dsPool.getHealthFactor(user1));
+        uint256 user1Debt = dsPool.getUserDebt(user1);
+        assertEq(user1Debt, dscUser1Mint);
+
+        // liquidator is user2, mint enough DSC to cover 50% of user1 debt
+        uint256 dscToCover = user1Debt / 2;
+        vm.startPrank(user2);
+        dsPool.mintDSC(dscToCover);
+        dsc.approve(address(dsPool), dscToCover);
+        dsPool.liquidate(weth, user1, dscToCover);
+        console.log("User1 Debt after liquidation: ", dsPool.getUserDebt(user1));
+        console.log("User1's health factor after liquidation: ", dsPool.getHealthFactor(user1));
+        vm.stopPrank();
+
+        uint256 user1_final_weth_deposited = dsPool.getUserCollateralDeposited(user1, weth);
+        uint256 user2_final_weth = IERC20(weth).balanceOf(user2);
+        console.log("User1 WETH deposited before liquidation: ", user1_init_weth_deposited);
+        console.log("User1 WETH deposited after liquidation: ", user1_final_weth_deposited);
+        console.log("User2 WETH before liquidation: ", user2_init_weth);
+        console.log("User2 WETH after liquidation: ", user2_final_weth);
+
+        uint256 user2_weth_gained = user2_final_weth - user2_init_weth;
+        assertGt(user2_weth_gained, 0);
+        assertEq(user2_weth_gained, user1_init_weth_deposited - user1_final_weth_deposited);
+    }
+
 }
