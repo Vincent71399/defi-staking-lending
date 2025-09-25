@@ -18,3 +18,6 @@ install:
 
 # run tests on sepolia
 #run_test :; forge test --fork-url $$SEPOLIA_RPC_URL -vvv
+
+coverage_report :; FOUNDRY_PROFILE=coverage forge coverage --report summary --report lcov -vv
+

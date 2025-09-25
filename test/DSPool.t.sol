@@ -9,6 +9,7 @@ import {OracleLib} from "../src/libraries/OracleLib.sol";
 import {HelperConfig} from "../script/HelperConfig.s.sol";
 import {MockToken} from "./mocks/MockToken.sol";
 import {MockV3Aggregator} from "./mocks/MockV3Aggregator.sol";
+import {MockWickedToken} from "./mocks/MockWickedToken.sol";
 
 contract DSPoolTest is Test {
     using OracleLib for address;
@@ -24,11 +25,12 @@ contract DSPoolTest is Test {
     address internal weth;
     address internal wbtc;
     address internal link;
+    address internal unsupportedToken;
 
     address internal owner = makeAddr("owner");
-    address internal user1 = makeAddr("user1");
-    address internal user2 = makeAddr("user2");
-    address internal user3 = makeAddr("user3");
+    address internal alice = makeAddr("alice");
+    address internal bob = makeAddr("bob");
+    address internal jimmy = makeAddr("jimmy");
 
     function setUp() public {
         helperConfig = new HelperConfig();
@@ -48,9 +50,11 @@ contract DSPoolTest is Test {
         dsc.transferOwnership(address(dsPool));
         vm.stopPrank();
 
-        _initCollateral(user1);
-        _initCollateral(user2);
-        _initCollateral(user3);
+        unsupportedToken = address(new MockToken("Unsupported Token", "UNSUP"));
+
+        _initCollateral(alice);
+        _initCollateral(bob);
+        _initCollateral(jimmy);
     }
 
     function _initCollateral(address user) private {
@@ -61,6 +65,8 @@ contract DSPoolTest is Test {
             uint256 amount = 10 ** token.decimals();
             token.mint(user, amount);
         }
+        uint256 unsupported_token_amount = 10 ** MockToken(unsupportedToken).decimals();
+        MockToken(unsupportedToken).mint(user, unsupported_token_amount);
     }
 
     modifier depositAllCollateral(address user) {
@@ -92,197 +98,451 @@ contract DSPoolTest is Test {
         _;
     }
 
-    function testDeposit() public depositAllCollateral(user1) {
-        uint256 totalValue = dsPool._calculateUserTotalCollateralValue(user1);
+    // constructor test
+    function testConstructorZeroLengthToken() public {
+        address[] memory tokens = new address[](0);
+        address[] memory priceFeeds = new address[](2);
+        priceFeeds[0] = ethUsdPriceFeed;
+        priceFeeds[1] = btcUsdPriceFeed;
+        vm.startPrank(owner);
+        vm.expectRevert(DSPool.DSPool__TokenAddressesAndPriceFeedAddressesNeedToBeGreaterThanZero.selector);
+        new DSPool(tokens, priceFeeds, address(dsc));
+        vm.stopPrank();
+    }
+
+    function testConstructorZeroLengthPriceFeed() public {
+        address[] memory tokens = new address[](2);
+        address[] memory priceFeeds = new address[](0);
+        tokens[0] = weth;
+        tokens[1] = wbtc;
+        vm.startPrank(owner);
+        vm.expectRevert(DSPool.DSPool__TokenAddressesAndPriceFeedAddressesNeedToBeGreaterThanZero.selector);
+        new DSPool(tokens, priceFeeds, address(dsc));
+        vm.stopPrank();
+    }
+
+    function testConstructorTokenLengthNotMatchPriceFeedLength() public {
+        address[] memory tokens = new address[](2);
+        address[] memory priceFeeds = new address[](3);
+        tokens[0] = weth;
+        tokens[1] = wbtc;
+        priceFeeds[0] = ethUsdPriceFeed;
+        priceFeeds[1] = btcUsdPriceFeed;
+        priceFeeds[2] = linkUsdPriceFeed;
+        vm.startPrank(owner);
+        vm.expectRevert(DSPool.DSPool__TokenAddressesAndPriceFeedAddressesAmountsDontMatch.selector);
+        new DSPool(tokens, priceFeeds, address(dsc));
+        vm.stopPrank();
+    }
+
+    // function test
+    function testDepositUnsupportedToken() public {
+        vm.startPrank(alice);
+        uint256 amount = IERC20(unsupportedToken).balanceOf(alice);
+        IERC20(unsupportedToken).approve(address(dsPool), amount);
+        vm.expectPartialRevert(DSPool.DSPool__TokenNotAllowed.selector);
+        dsPool.depositCollateral(unsupportedToken, amount);
+        vm.stopPrank();
+    }
+
+    function testDepositZeroAmountReverts() public {
+        vm.startPrank(alice);
+        IERC20(weth).approve(address(dsPool), 0);
+        vm.expectRevert(DSPool.DSPool__NeedsMoreThanZero.selector);
+        dsPool.depositCollateral(weth, 0);
+        vm.stopPrank();
+    }
+
+    function testDeposit() public {
+        vm.startPrank(alice);
+        uint256 amount = IERC20(weth).balanceOf(alice);
+        IERC20(weth).approve(address(dsPool), amount);
+        vm.expectEmit(true, false, false, true, address(dsPool));
+        emit DSPool.CollateralDeposited(alice, weth, amount);
+        dsPool.depositCollateral(weth, amount);
+        vm.stopPrank();
+
+        uint256 totalValue = dsPool.getUserTotalCollateralValueInUSD(alice);
         console.log("Total Collateral Value of User1 in USD: ", totalValue);
         assert(totalValue > 0);
-        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(user1);
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
         console.log("Max DSC User1 can mint: ", maxDSC);
     }
 
     function testDepositSingleCollateral() public {
-        vm.startPrank(user1);
-        uint256 amount = IERC20(weth).balanceOf(user1);
-        console.log("User1 WETH balance", amount);
+        vm.startPrank(alice);
+        uint256 amount = IERC20(weth).balanceOf(alice);
         IERC20(weth).approve(address(dsPool), amount);
         dsPool.depositCollateral(weth, amount);
-        console.log("User1 total collateral in usd", dsPool.getUserTotalCollateralValueInUSD(user1));
+        assertEq(dsPool.getUserTotalCollateralValueInUSD(alice), ethUsdPriceFeed.getActualPrice());
         vm.stopPrank();
 
-        vm.startPrank(user2);
-        amount = IERC20(wbtc).balanceOf(user2);
-        console.log("User2 WBTC balance", amount);
+        vm.startPrank(bob);
+        amount = IERC20(wbtc).balanceOf(bob);
         IERC20(wbtc).approve(address(dsPool), amount);
         dsPool.depositCollateral(wbtc, amount);
-        console.log("User2 total collateral in usd", dsPool.getUserTotalCollateralValueInUSD(user2));
+        assertEq(dsPool.getUserTotalCollateralValueInUSD(bob), btcUsdPriceFeed.getActualPrice());
         vm.stopPrank();
     }
 
-    function testMint(uint256 mintAmount) public depositAllCollateral(user1) {
-        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(user1);
-        mintAmount = bound(mintAmount, 1, maxDSC);
-        vm.prank(user1);
-        dsPool.mintDSC(mintAmount);
+    function test_DepositCollateral_TransferFromFail_ReturnFalse() public {
+        MockWickedToken wickedToken = new MockWickedToken("Wicked Token", "WICK");
+        wickedToken.mint(alice, 1 ether);
 
-        uint256 dscBalance = dsc.balanceOf(user1);
-        assert(dscBalance == mintAmount);
-    }
-
-    function testMintExceedMaxLimit() public depositAllCollateral(user1) {
-        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(user1);
-        vm.prank(user1);
-        vm.expectRevert(DSPool.DSPool__HealthFactorTooLow.selector);
-        dsPool.mintDSC(maxDSC + 1);
-    }
-
-    function testMintZero() public depositAllCollateral(user1) {
-        vm.prank(user1);
-        vm.expectRevert(DSPool.DSPool__NeedsMoreThanZero.selector);
-        dsPool.mintDSC(0);
-    }
-
-    function testBurn(uint256 burnAmount) public depositAllCollateral(user1) mintMaxDSC(user1) {
-        uint256 maxDSC = dsc.balanceOf(user1);
-        vm.startPrank(user1);
-        // burn
-        burnAmount = bound(burnAmount, 1, maxDSC);
-        dsc.approve(address(dsPool), burnAmount);
-        dsPool.burnDSC(burnAmount);
-        uint256 dscBalance = dsc.balanceOf(user1);
-        assert(dscBalance == maxDSC - burnAmount);
+        address[] memory tokens = new address[](2);
+        address[] memory priceFeeds = new address[](2);
+        tokens[0] = address(wickedToken);
+        tokens[1] = wbtc;
+        priceFeeds[0] = ethUsdPriceFeed;
+        priceFeeds[1] = btcUsdPriceFeed;
+        vm.startPrank(owner);
+        DSPool wickedDsPool = new DSPool(tokens, priceFeeds, address(dsc));
+        DSCoin wickedDsc = new DSCoin();
+        wickedDsc.transferOwnership(address(wickedDsPool));
         vm.stopPrank();
-    }
 
-    function testBurnExceedBalance() public depositAllCollateral(user1) mintMaxDSC(user1) {
-        uint256 burnAmount = dsc.balanceOf(user1) + 1;
-        vm.startPrank(user1);
-        dsc.approve(address(dsPool), burnAmount);
-        vm.expectRevert(DSPool.DSPool__BurnAmountExceedsBalance.selector);
-        dsPool.burnDSC(burnAmount);
-        vm.stopPrank();
-    }
-
-    function testBurnZero() public depositAllCollateral(user1) mintMaxDSC(user1) {
-        vm.startPrank(user1);
-        vm.expectRevert(DSPool.DSPool__NeedsMoreThanZero.selector);
-        dsPool.burnDSC(0);
+        vm.startPrank(alice);
+        uint256 amount = wickedToken.balanceOf(alice);
+        wickedToken.approve(address(wickedDsPool), amount);
+        vm.expectRevert(DSPool.DSPool__TokenTransferFailed.selector);
+        wickedDsPool.depositCollateral(address(wickedToken), amount);
         vm.stopPrank();
     }
 
     function testDepositMintInOneStep() public {
         uint256 amountToDeposit = 1 ether;
         uint256 amountDSCMint = uint256(ethUsdPriceFeed.getSimplePrice());
-        vm.startPrank(user1);
+        vm.startPrank(alice);
         IERC20(weth).approve(address(dsPool), amountToDeposit);
         dsPool.depositCollateralAndMintDSC(weth, amountToDeposit, amountDSCMint);
         vm.stopPrank();
 
-        uint256 dscBalance = dsc.balanceOf(user1);
+        uint256 dscBalance = dsc.balanceOf(alice);
         console.log("DSC Balance of User1: ", dscBalance);
         assert(dscBalance == amountDSCMint);
     }
 
-    function testRedeem(uint256 amountToRedeem) public depositOneEth(user1) {
-        uint256 initialCollateral = dsPool.getUserCollateralDeposited(user1, weth);
+    function testDepositAndMintSingleTxRevertsIfWouldBreakHF() public {
+        // Deposit tiny amount then try mint way too much -> revert on mint (whole tx reverts including deposit)
+        uint256 amountToDeposit = 1e9; // very small (assuming 18 decimals)
+        uint256 tooMuch = 1e24;
+        vm.startPrank(alice);
+        IERC20(weth).approve(address(dsPool), amountToDeposit);
+        vm.expectRevert(DSPool.DSPool__HealthFactorTooLow.selector);
+        dsPool.depositCollateralAndMintDSC(weth, amountToDeposit, tooMuch);
+        vm.stopPrank();
+
+        // Ensure no collateral was actually deposited due to revert
+        assertEq(dsPool.getUserCollateralDeposited(alice, weth), 0);
+    }
+
+    function testMint(uint256 mintAmount) public depositAllCollateral(alice) {
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        mintAmount = bound(mintAmount, 1, maxDSC);
+        vm.prank(alice);
+        dsPool.mintDSC(mintAmount);
+
+        uint256 dscBalance = dsc.balanceOf(alice);
+        assert(dscBalance == mintAmount);
+    }
+
+    function testMintWithoutCollateralReverts() public {
+        // user1 has minted collateral in setUp via _initCollateral, but hasn't deposited
+        uint256 tryMint = 1e18;
+        vm.startPrank(alice);
+        vm.expectRevert(DSPool.DSPool__HealthFactorTooLow.selector);
+        dsPool.mintDSC(tryMint);
+        vm.stopPrank();
+    }
+
+    function testMintExceedMaxLimit() public depositAllCollateral(alice) {
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        vm.prank(alice);
+        vm.expectRevert(DSPool.DSPool__HealthFactorTooLow.selector);
+        dsPool.mintDSC(maxDSC + 1);
+    }
+
+    function testMintZero() public depositAllCollateral(alice) {
+        vm.prank(alice);
+        vm.expectRevert(DSPool.DSPool__NeedsMoreThanZero.selector);
+        dsPool.mintDSC(0);
+    }
+
+    function testBurn(uint256 burnAmount) public depositAllCollateral(alice) mintMaxDSC(alice) {
+        uint256 maxDSC = dsc.balanceOf(alice);
+        vm.startPrank(alice);
+        // burn
+        burnAmount = bound(burnAmount, 1, maxDSC);
+        dsc.approve(address(dsPool), burnAmount);
+        dsPool.burnDSC(burnAmount);
+        uint256 dscBalance = dsc.balanceOf(alice);
+        assert(dscBalance == maxDSC - burnAmount);
+        vm.stopPrank();
+    }
+
+    function testBurnIncreasesHealthFactor() public depositOneEth(alice) {
+        // Mint 80% of max, then burn half; HF should increase after burn.
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        uint256 mintAmt = (maxDSC * 80) / 100;
+        vm.startPrank(alice);
+        dsPool.mintDSC(mintAmt);
+        uint256 hfBefore = dsPool.getHealthFactor(alice);
+        dsc.approve(address(dsPool), mintAmt / 2);
+        dsPool.burnDSC(mintAmt / 2);
+        uint256 hfAfter = dsPool.getHealthFactor(alice);
+        vm.stopPrank();
+        assertGt(hfAfter, hfBefore);
+    }
+
+    function testBurnExceedBalance() public depositAllCollateral(alice) mintMaxDSC(alice) {
+        uint256 burnAmount = dsc.balanceOf(alice) + 1;
+        vm.startPrank(alice);
+        dsc.approve(address(dsPool), burnAmount);
+        vm.expectRevert(DSPool.DSPool__BurnAmountExceedsBalance.selector);
+        dsPool.burnDSC(burnAmount);
+        vm.stopPrank();
+    }
+
+    function testBurnZero() public depositAllCollateral(alice) mintMaxDSC(alice) {
+        vm.startPrank(alice);
+        vm.expectRevert(DSPool.DSPool__NeedsMoreThanZero.selector);
+        dsPool.burnDSC(0);
+        vm.stopPrank();
+    }
+
+    function testRedeemZeroReverts() public depositOneEth(alice) {
+        vm.startPrank(alice);
+        vm.expectRevert(DSPool.DSPool__NeedsMoreThanZero.selector);
+        dsPool.redeemCollateral(weth, 0);
+        vm.stopPrank();
+    }
+
+    function testRedeem(uint256 amountToRedeem) public depositOneEth(alice) {
+        uint256 initialCollateral = dsPool.getUserCollateralDeposited(alice, weth);
         amountToRedeem = bound(amountToRedeem, 1, initialCollateral);
-        vm.startPrank(user1);
+        vm.startPrank(alice);
+        vm.expectEmit(true, true, false, true, address(dsPool));
+        emit DSPool.CollateralRedeemed(alice, alice, weth, amountToRedeem);
         dsPool.redeemCollateral(weth, amountToRedeem);
         vm.stopPrank();
-        uint256 newCollateral = dsPool.getUserCollateralDeposited(user1, weth);
+        uint256 newCollateral = dsPool.getUserCollateralDeposited(alice, weth);
         assert(newCollateral == initialCollateral - amountToRedeem);
     }
 
-    function testRedeemExceedBalance() public depositOneEth(user1) {
-        uint256 initialCollateral = dsPool.getUserCollateralDeposited(user1, weth);
+    function testRedeemExceedBalance() public depositOneEth(alice) {
+        uint256 initialCollateral = dsPool.getUserCollateralDeposited(alice, weth);
         uint256 amountToRedeem = initialCollateral + 1;
-        vm.startPrank(user1);
+        vm.startPrank(alice);
         vm.expectRevert();
         dsPool.redeemCollateral(weth, amountToRedeem);
         vm.stopPrank();
     }
 
-    function testRedeemBurnDSCInOneStep() public depositOneEth(user1) {
-        uint256 initialCollateral = dsPool.getUserCollateralDeposited(user1, weth);
-        uint256 dscAmount = dsPool.getMaxDSCUserCanMint(user1);
-        vm.startPrank(user1);
+    function testRedeemBreaksHealthFactorReverts() public depositOneEth(alice) mintMaxDSC(alice) {
+        // With max minted, HF == 1. Redeeming any nonzero collateral will break HF.
+        vm.startPrank(alice);
+        vm.expectRevert(DSPool.DSPool__HealthFactorTooLow.selector);
+        dsPool.redeemCollateral(weth, 1);
+        vm.stopPrank();
+    }
+
+    function testRedeemBurnDSCInOneStep() public depositOneEth(alice) {
+        uint256 initialCollateral = dsPool.getUserCollateralDeposited(alice, weth);
+        uint256 dscAmount = dsPool.getMaxDSCUserCanMint(alice);
+        vm.startPrank(alice);
         dsPool.mintDSC(dscAmount);
         // redeem all collateral by burning max DSC
-        uint256 initialDSCBalance = dsc.balanceOf(user1);
-        uint256 initialCollateralBalance = IERC20(weth).balanceOf(user1);
+        uint256 initialDSCBalance = dsc.balanceOf(alice);
+        uint256 initialCollateralBalance = IERC20(weth).balanceOf(alice);
         dsc.approve(address(dsPool), dscAmount);
         dsPool.redeemCollateralAndBurnDSC(weth, initialCollateral, dscAmount);
-        uint256 newDSCBalance = dsc.balanceOf(user1);
-        uint256 newCollateralBalance = IERC20(weth).balanceOf(user1);
+        uint256 newDSCBalance = dsc.balanceOf(alice);
+        uint256 newCollateralBalance = IERC20(weth).balanceOf(alice);
         assert(newDSCBalance == initialDSCBalance - dscAmount);
         assert(newCollateralBalance == initialCollateralBalance + initialCollateral);
         vm.stopPrank();
     }
 
+    function testRedeemCollateralAndBurnDSCPartialKeepsHealthSafe() public depositOneEth(alice) {
+        // Mint some DSC, then redeem a portion while burning a portion in same tx.
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        uint256 mintAmt = (maxDSC * 60) / 100;
+        vm.startPrank(alice);
+        dsPool.mintDSC(mintAmt);
+
+        uint256 initialDSCBal = dsc.balanceOf(alice);
+        uint256 initialWethBal = IERC20(weth).balanceOf(alice);
+        uint256 deposited = dsPool.getUserCollateralDeposited(alice, weth);
+
+        uint256 redeemAmt = deposited / 2;
+        uint256 burnAmt = mintAmt / 2;
+
+        dsc.approve(address(dsPool), burnAmt);
+        dsPool.redeemCollateralAndBurnDSC(weth, redeemAmt, burnAmt);
+
+        // Post conditions
+        assertEq(dsc.balanceOf(alice), initialDSCBal - burnAmt);
+        assertEq(IERC20(weth).balanceOf(alice), initialWethBal + redeemAmt);
+
+        // Health factor should remain >= 1
+        assertFalse(dsPool.isLiquidatable(alice));
+        vm.stopPrank();
+    }
+
     // test price drop and liquidation
-    function testPriceDrop() public depositOneEth(user1) {
-        uint256 initValue = dsPool._calculateUserTotalCollateralValue(user1);
+    function testPriceDrop() public depositOneEth(alice) mintMaxDSC(alice) {
+        uint256 initValue = dsPool.getUserTotalCollateralValueInUSD(alice);
         console.log("Total Collateral Value of User1 in USD: ", initValue);
-        uint256 dscToMint = dsPool.getMaxDSCUserCanMint(user1);
 
-        vm.prank(user1);
-        dsPool.mintDSC(dscToMint);
-
-        uint256 initHealthFactor = dsPool.getHealthFactor(user1);
+        uint256 initHealthFactor = dsPool.getHealthFactor(alice);
         console.log("Init Health Factor of User1: ", initHealthFactor);
-        assertFalse(dsPool.isLiquidatable(user1));
-        assertEq(dsPool.getUserDebt(user1), 0);
+        assertFalse(dsPool.isLiquidatable(alice));
+        assertEq(dsPool.getUserDebt(alice), 0);
         int256 currentETHPrice = ethUsdPriceFeed.getSimplePrice();
         console.log("Current ETH Price: ", currentETHPrice);
         // drop price by 20%
         currentETHPrice = currentETHPrice * 80 / 100;
         MockV3Aggregator(ethUsdPriceFeed).updateAnswer(currentETHPrice);
-        uint256 newValue = dsPool._calculateUserTotalCollateralValue(user1);
+        uint256 newValue = dsPool.getUserTotalCollateralValueInUSD(alice);
         console.log("Total Collateral Value of User1 in USD: ", newValue);
         assertApproxEqAbs(newValue, initValue * 80 / 100, 2);
-        uint256 newHealthFactor = dsPool.getHealthFactor(user1);
+        uint256 newHealthFactor = dsPool.getHealthFactor(alice);
         console.log("New Health Factor of User1: ", newHealthFactor);
         assertGt(initHealthFactor, newHealthFactor);
-        assertTrue(dsPool.isLiquidatable(user1));
-        assertGt(dsPool.getUserDebt(user1), 0);
+        assertTrue(dsPool.isLiquidatable(alice));
+        assertGt(dsPool.getUserDebt(alice), 0);
     }
 
     // test liquidation
-    function testLiquidation() public depositOneEth(user1) depositAllCollateral(user2) {
-        uint256 user1_init_weth_deposited = dsPool.getUserCollateralDeposited(user1, weth);
-        uint256 user2_init_weth = IERC20(weth).balanceOf(user2);
+    function testLiquidation() public depositOneEth(alice) depositAllCollateral(bob) {
+        uint256 user1_init_weth_deposited = dsPool.getUserCollateralDeposited(alice, weth);
+        uint256 user2_init_weth = IERC20(weth).balanceOf(bob);
 
-        uint256 dscUser1Mint = dsPool.getMaxDSCUserCanMint(user1);
-        vm.prank(user1);
+        uint256 dscUser1Mint = dsPool.getMaxDSCUserCanMint(alice);
+        vm.prank(alice);
         dsPool.mintDSC(dscUser1Mint);
 
         int256 currentETHPrice = ethUsdPriceFeed.getSimplePrice();
         // drop price by 20%
         currentETHPrice = currentETHPrice * 80 / 100;
         MockV3Aggregator(ethUsdPriceFeed).updateAnswer(currentETHPrice);
-        assertTrue(dsPool.isLiquidatable(user1));
-        console.log("User1's health factor before liquidation: ", dsPool.getHealthFactor(user1));
-        uint256 user1Debt = dsPool.getUserDebt(user1);
+        assertTrue(dsPool.isLiquidatable(alice));
+        uint256 user1Debt = dsPool.getUserDebt(alice);
         assertEq(user1Debt, dscUser1Mint);
 
         // liquidator is user2, mint enough DSC to cover 50% of user1 debt
         uint256 dscToCover = user1Debt / 2;
-        vm.startPrank(user2);
+        vm.startPrank(bob);
         dsPool.mintDSC(dscToCover);
         dsc.approve(address(dsPool), dscToCover);
-        dsPool.liquidate(weth, user1, dscToCover);
-        console.log("User1 Debt after liquidation: ", dsPool.getUserDebt(user1));
-        console.log("User1's health factor after liquidation: ", dsPool.getHealthFactor(user1));
+        dsPool.liquidate(weth, alice, dscToCover);
         vm.stopPrank();
 
-        uint256 user1_final_weth_deposited = dsPool.getUserCollateralDeposited(user1, weth);
-        uint256 user2_final_weth = IERC20(weth).balanceOf(user2);
-        console.log("User1 WETH deposited before liquidation: ", user1_init_weth_deposited);
-        console.log("User1 WETH deposited after liquidation: ", user1_final_weth_deposited);
-        console.log("User2 WETH before liquidation: ", user2_init_weth);
-        console.log("User2 WETH after liquidation: ", user2_final_weth);
+        uint256 user1_final_weth_deposited = dsPool.getUserCollateralDeposited(alice, weth);
+        uint256 user2_final_weth = IERC20(weth).balanceOf(bob);
 
         uint256 user2_weth_gained = user2_final_weth - user2_init_weth;
         assertGt(user2_weth_gained, 0);
         assertEq(user2_weth_gained, user1_init_weth_deposited - user1_final_weth_deposited);
+    }
+
+    function testLiquidateWhenNotLiquidatableReverts() public depositOneEth(alice) depositAllCollateral(bob) {
+        // user1 is healthy
+        assertFalse(dsPool.isLiquidatable(alice));
+        vm.startPrank(bob);
+        dsPool.mintDSC(1e18);
+        dsc.approve(address(dsPool), 1e18);
+        vm.expectRevert(DSPool.DSPool__UserNotLiquidatable.selector);
+        dsPool.liquidate(weth, alice, 1e18);
+        vm.stopPrank();
+    }
+
+    function testLiquidateCoverOverDebt() public depositOneEth(alice) depositAllCollateral(bob) {
+        uint256 user1_init_weth_deposited = dsPool.getUserCollateralDeposited(alice, weth);
+        uint256 user2_init_weth = IERC20(weth).balanceOf(bob);
+
+        uint256 dscUser1Mint = dsPool.getMaxDSCUserCanMint(alice);
+        vm.prank(alice);
+        dsPool.mintDSC(dscUser1Mint);
+
+        int256 currentETHPrice = ethUsdPriceFeed.getSimplePrice();
+        // drop price by 20%
+        currentETHPrice = currentETHPrice * 80 / 100;
+        MockV3Aggregator(ethUsdPriceFeed).updateAnswer(currentETHPrice);
+        assertTrue(dsPool.isLiquidatable(alice));
+        uint256 user1Debt = dsPool.getUserDebt(alice);
+        assertEq(user1Debt, dscUser1Mint);
+
+        // liquidator all user1 debt
+        uint256 dscToCover = user1Debt + 1;
+        vm.startPrank(bob);
+        dsPool.mintDSC(dscToCover);
+        dsc.approve(address(dsPool), dscToCover);
+        dsPool.liquidate(weth, alice, dscToCover);
+        vm.stopPrank();
+
+        uint256 user1_final_weth_deposited = dsPool.getUserCollateralDeposited(alice, weth);
+        uint256 user2_final_weth = IERC20(weth).balanceOf(bob);
+
+        uint256 user2_weth_gained = user2_final_weth - user2_init_weth;
+        assertGt(user2_weth_gained, 0);
+        assertEq(user2_weth_gained, user1_init_weth_deposited - user1_final_weth_deposited);
+    }
+
+    function testLiquidateEndingHealthBecomeWorst() public depositOneEth(alice) depositAllCollateral(bob) {
+        uint256 dscUser1Mint = dsPool.getMaxDSCUserCanMint(alice);
+        vm.prank(alice);
+        dsPool.mintDSC(dscUser1Mint);
+
+        int256 currentETHPrice = ethUsdPriceFeed.getSimplePrice();
+        // drop price by 50%
+        currentETHPrice = currentETHPrice * 50 / 100;
+        MockV3Aggregator(ethUsdPriceFeed).updateAnswer(currentETHPrice);
+        assertTrue(dsPool.isLiquidatable(alice));
+        uint256 user1Debt = dsPool.getUserDebt(alice);
+        assertEq(user1Debt, dscUser1Mint);
+
+        // liquidator is user2, mint enough DSC to cover 50% of user1 debt
+        uint256 dscToCover = user1Debt / 2;
+        vm.startPrank(bob);
+        dsPool.mintDSC(dscToCover);
+        dsc.approve(address(dsPool), dscToCover);
+        vm.expectRevert(DSPool.DSPool__HealthFactorNotImproved.selector);
+        dsPool.liquidate(weth, alice, dscToCover);
+        vm.stopPrank();
+    }
+
+    // test getters
+    function testGettersHealthyUserDebtZero() public depositOneEth(alice) {
+        assertFalse(dsPool.isLiquidatable(alice));
+        assertEq(dsPool.getUserDebt(alice), 0);
+    }
+
+    function testHealthFactorMaxWhenNoDebt() public depositOneEth(alice) {
+        // When no debt, internal HF returns type(uint256).max; public getter exposes the computed value.
+        uint256 hf = dsPool.getHealthFactor(alice);
+        assertEq(hf, type(uint256).max);
+    }
+
+    function testGetUserTotalCollateralValueMultiToken() public depositAllCollateral(alice) {
+        // 1 unit of each token was minted to user1 in setUp and fully deposited via modifier.
+        uint256 expected = uint256(ethUsdPriceFeed.getActualPrice()) + uint256(btcUsdPriceFeed.getActualPrice())
+            + uint256(linkUsdPriceFeed.getActualPrice());
+        assertApproxEqAbs(dsPool.getUserTotalCollateralValueInUSD(alice), expected, 2);
+    }
+
+    function testGetMaxDSCUserCanMintMatchesThreshold() public depositAllCollateral(alice) {
+        // LIQUIDATION_THRESHOLD = 50, LIQUIDATION_PRECISION = 100
+        uint256 totalUsd = dsPool.getUserTotalCollateralValueInUSD(alice);
+        uint256 expectedMax = (totalUsd * 50) / 100;
+        assertEq(dsPool.getMaxDSCUserCanMint(alice) / 1e18, expectedMax); // internal uses 18-dec scaled values
+            // Explanation:
+            // getUserTotalCollateralValueInUSD returns an unscaled USD (already divided by 1e18),
+            // while getMax... uses the internal 18-dec value. Multiply back by 1e18 for equality.
+    }
+
+    function testGetUserCollateralDepositedUnsupportedTokenReverts() public {
+        vm.expectPartialRevert(DSPool.DSPool__TokenNotAllowed.selector);
+        dsPool.getUserCollateralDeposited(alice, unsupportedToken);
     }
 }

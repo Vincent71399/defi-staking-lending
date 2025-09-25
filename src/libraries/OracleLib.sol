@@ -32,4 +32,9 @@ library OracleLib {
         (, int256 answer,,,,) = getPrice(chainlinkFeedAddress);
         return answer;
     }
+
+    function getActualPrice(address chainlinkFeedAddress) public view returns (uint256) {
+        (, int256 answer,,,, uint8 decimals) = getPrice(chainlinkFeedAddress);
+        return uint256(answer) / (10 ** decimals);
+    }
 }

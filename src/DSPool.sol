@@ -29,8 +29,6 @@ contract DSPool is ReentrancyGuard {
     ///////////////////
     event CollateralDeposited(address indexed user, address token, uint256 amount);
     event CollateralRedeemed(address indexed redeemFrom, address indexed redeemTo, address token, uint256 amount);
-    event DSCMinted(address indexed user, uint256 amount);
-    event DSCBurned(address indexed user, uint256 amount);
 
     ///////////////////
     // State Variables
@@ -226,10 +224,7 @@ contract DSPool is ReentrancyGuard {
         }
     }
 
-    function _burnDSC(uint256 amountDscToBurn, address onBehalfOf, address dscFrom)
-        public
-        moreThanZero(amountDscToBurn)
-    {
+    function _burnDSC(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) public {
         if (i_dsc.balanceOf(dscFrom) < amountDscToBurn) {
             revert DSPool__BurnAmountExceedsBalance();
         }
@@ -238,7 +233,7 @@ contract DSPool is ReentrancyGuard {
     }
 
     function _calculateUserTotalCollateralValue(address user)
-        public
+        private
         view
         returns (uint256 totalUserCollateralValueInDsc)
     {
@@ -290,7 +285,7 @@ contract DSPool is ReentrancyGuard {
 
     function _calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd)
         internal
-        view
+        pure
         returns (uint256)
     {
         if (totalDscMinted == 0) return type(uint256).max;
