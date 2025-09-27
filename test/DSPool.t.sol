@@ -10,6 +10,7 @@ import {HelperConfig} from "../script/HelperConfig.s.sol";
 import {MockToken} from "./mocks/MockToken.sol";
 import {MockV3Aggregator} from "./mocks/MockV3Aggregator.sol";
 import {MockWickedToken} from "./mocks/MockWickedToken.sol";
+import {DeployDSPool} from "../script/DeployDSPool.s.sol";
 
 contract DSPoolTest is Test {
     using OracleLib for address;
@@ -33,7 +34,9 @@ contract DSPoolTest is Test {
     address internal jimmy = makeAddr("jimmy");
 
     function setUp() public {
-        helperConfig = new HelperConfig();
+        DeployDSPool deployDSPool = new DeployDSPool();
+
+        (dsPool, dsc, helperConfig) = deployDSPool.run();
         address[] memory priceFeeds = helperConfig.getPriceFeeds();
         ethUsdPriceFeed = priceFeeds[0];
         btcUsdPriceFeed = priceFeeds[1];
@@ -43,12 +46,6 @@ contract DSPoolTest is Test {
         weth = tokens[0];
         wbtc = tokens[1];
         link = tokens[2];
-
-        vm.startPrank(owner);
-        dsc = new DSCoin();
-        dsPool = new DSPool(helperConfig.getTokens(), priceFeeds, address(dsc));
-        dsc.transferOwnership(address(dsPool));
-        vm.stopPrank();
 
         unsupportedToken = address(new MockToken("Unsupported Token", "UNSUP"));
 
@@ -544,5 +541,123 @@ contract DSPoolTest is Test {
     function testGetUserCollateralDepositedUnsupportedTokenReverts() public {
         vm.expectPartialRevert(DSPool.DSPool__TokenNotAllowed.selector);
         dsPool.getUserCollateralDeposited(alice, unsupportedToken);
+    }
+
+    // ----------------------------
+    // getMaxRedeemableCollateral()
+    // ----------------------------
+
+    function testGetMaxRedeemableCollateral_NoDebt_AllRedeemable() public depositOneEth(alice) {
+        uint256 deposited = dsPool.getUserCollateralDeposited(alice, weth);
+        uint256 maxRedeem = dsPool.getMaxRedeemableCollateral(alice, weth);
+        assertEq(maxRedeem, deposited, "when no debt, full balance should be redeemable");
+
+        // Redeeming full amount must succeed and HF stays >= 1 (actually max uint when no debt)
+        vm.startPrank(alice);
+        dsPool.redeemCollateral(weth, maxRedeem);
+        vm.stopPrank();
+        assertEq(dsPool.getUserCollateralDeposited(alice, weth), 0);
+        assertFalse(dsPool.isLiquidatable(alice));
+    }
+
+    function testGetMaxRedeemableCollateral_HFEqualsOne_ReturnsZero() public depositOneEth(alice) mintMaxDSC(alice) {
+        // At max mint, HF == 1, so you can't redeem anything safely
+        uint256 maxRedeem = dsPool.getMaxRedeemableCollateral(alice, weth);
+        assertEq(maxRedeem, 0, "at HF=1, nothing should be redeemable");
+
+        vm.startPrank(alice);
+        vm.expectRevert(DSPool.DSPool__HealthFactorTooLow.selector);
+        dsPool.redeemCollateral(weth, 1);
+        vm.stopPrank();
+    }
+
+    function testGetMaxRedeemableCollateral_RedeemExactlyMax_Succeeds() public depositOneEth(alice) {
+        // Mint to a safe HF > 1, so some headroom exists
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        uint256 mintAmt = (maxDSC * 60) / 100;
+        vm.startPrank(alice);
+        dsPool.mintDSC(mintAmt);
+
+        uint256 beforeHF = dsPool.getHealthFactor(alice);
+        uint256 maxRedeem = dsPool.getMaxRedeemableCollateral(alice, weth);
+        assertGt(maxRedeem, 0, "should have some redeemable headroom");
+
+        // Redeeming exactly the max should NOT break HF
+        dsPool.redeemCollateral(weth, maxRedeem);
+        uint256 afterHF = dsPool.getHealthFactor(alice);
+        vm.stopPrank();
+
+        assertGe(afterHF, 1e18, "HF must remain >= 1 after redeeming max");
+        // Typically HF goes down or stays same after redeeming
+        assertLe(afterHF, beforeHF);
+        assertFalse(dsPool.isLiquidatable(alice));
+    }
+
+    function testGetMaxRedeemableCollateral_RedeemMaxPlusOne_Reverts() public depositOneEth(alice) {
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        uint256 mintAmt = (maxDSC * 60) / 100;
+        vm.startPrank(alice);
+        dsPool.mintDSC(mintAmt);
+
+        uint256 maxRedeem = dsPool.getMaxRedeemableCollateral(alice, weth);
+        // If headroom exists, redeeming just 1 wei more should fail due to HF < 1
+        vm.expectRevert(DSPool.DSPool__HealthFactorTooLow.selector);
+        dsPool.redeemCollateral(weth, maxRedeem + 1);
+        vm.stopPrank();
+    }
+
+    function testGetMaxRedeemableCollateral_MultiToken_OnlyAffectsChosenToken() public depositAllCollateral(alice) {
+        // Mint to ~40% of max so there's room
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        uint256 mintAmt = (maxDSC * 40) / 100;
+
+        vm.startPrank(alice);
+        dsPool.mintDSC(mintAmt);
+
+        uint256 wethBefore = dsPool.getUserCollateralDeposited(alice, weth);
+        uint256 wbtcBefore = dsPool.getUserCollateralDeposited(alice, wbtc);
+
+        uint256 maxRedeemWeth = dsPool.getMaxRedeemableCollateral(alice, weth);
+        assertGt(maxRedeemWeth, 0, "expect some redeemable WETH");
+
+        dsPool.redeemCollateral(weth, maxRedeemWeth);
+        vm.stopPrank();
+
+        // Only WETH balance should change
+        assertEq(dsPool.getUserCollateralDeposited(alice, weth), wethBefore - maxRedeemWeth);
+        assertEq(dsPool.getUserCollateralDeposited(alice, wbtc), wbtcBefore);
+
+        // HF must remain safe
+        assertFalse(dsPool.isLiquidatable(alice));
+        assertGe(dsPool.getHealthFactor(alice), 1e18);
+    }
+
+    function testGetMaxRedeemableCollateral_DecreasesAfterPriceDrop() public depositOneEth(alice) {
+        // Create headroom
+        uint256 maxDSC = dsPool.getMaxDSCUserCanMint(alice);
+        uint256 mintAmt = (maxDSC * 20) / 100;
+        vm.startPrank(alice);
+        dsPool.mintDSC(mintAmt);
+        vm.stopPrank();
+
+        uint256 before = dsPool.getMaxRedeemableCollateral(alice, weth);
+
+        // 20% ETH price drop
+        int256 p = ethUsdPriceFeed.getSimplePrice();
+        MockV3Aggregator(ethUsdPriceFeed).updateAnswer((p * 80) / 100);
+
+        uint256 afterDrop = dsPool.getMaxRedeemableCollateral(alice, weth);
+        assertLe(afterDrop, before, "redeemable should not increase after a price drop");
+    }
+
+    function testGetMaxRedeemableCollateral_UnsupportedToken_Reverts() public {
+        vm.expectPartialRevert(DSPool.DSPool__TokenNotAllowed.selector);
+        dsPool.getMaxRedeemableCollateral(alice, unsupportedToken);
+    }
+
+    function testGetMaxRedeemableCollateral_NoDeposit_ReturnsZero() public {
+        // bob has minted tokens in setUp but hasn't deposited any collateral
+        uint256 maxRedeem = dsPool.getMaxRedeemableCollateral(bob, weth);
+        assertEq(maxRedeem, 0);
     }
 }
