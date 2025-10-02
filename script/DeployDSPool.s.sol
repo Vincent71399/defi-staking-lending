@@ -21,7 +21,7 @@ contract DeployDSPool is Script {
         console.log("DSPool at ", address(dsPool));
         console.log("DSCoin at ", address(dsc));
 
-        for(uint i = 0; i < helperConfig.getTokens().length; i++) {
+        for (uint256 i = 0; i < helperConfig.getTokens().length; i++) {
             console.log("Token", i, "at", helperConfig.getTokens()[i]);
             console.log("Price Feed", i, "at", helperConfig.getPriceFeeds()[i]);
         }
