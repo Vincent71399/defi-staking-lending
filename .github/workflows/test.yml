@@ -39,3 +39,108 @@ jobs:
         run: |
           forge test -vvv
         id: test
+
+      # ---------- Snapshot generation + verification ----------
+      - name: Install helpers (jq, xxd, gzip)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq xxd gzip  
+
+      - name: Start Anvil (background)
+        run: |
+          mkdir -p anvil_states
+          nohup anvil --port 8545 > anvil.log 2>&1 &
+          echo "ANVIL_PID=$!" >> $GITHUB_ENV
+          echo "RPC=http://127.0.0.1:8545" >> $GITHUB_ENV
+          # small wait for Anvil to boot
+          sleep 2
+
+      - name: Deploy with Forge script (broadcast)
+        env:
+          RPC: http://127.0.0.1:8545
+          # Default first Anvil dev key (same one you used locally)
+          PRIVATE_KEY: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+        run: |
+          forge script script/DeployDSPool.s.sol:DeployDSPool \
+            --rpc-url "$RPC" --broadcast --private-key "$PRIVATE_KEY" -vvv
+
+      - name: Extract deployed addresses from broadcast
+        id: addrs
+        run: |
+          BCAST="broadcast/DeployDSPool.s.sol/31337/run-latest.json"
+          if [ ! -f "$BCAST" ]; then
+            echo "Broadcast artifact not found: $BCAST"
+            ls -R broadcast || true
+            exit 1
+          fi
+          DSC=$(jq -r '.transactions[] | select(.contractName=="DSCoin")  | .contractAddress' "$BCAST" | tail -n1)
+          POOL=$(jq -r '.transactions[] | select(.contractName=="DSPool") | .contractAddress' "$BCAST" | tail -n1)
+          echo "DSC=$DSC"   >> $GITHUB_ENV
+          echo "POOL=$POOL" >> $GITHUB_ENV
+          echo "Deployed: DSC=$DSC, POOL=$POOL"
+
+      - name: Dump Anvil state to JSON (hex+gzip → JSON)
+        run: |
+          # anvil_dumpState returns hex-encoded + gzip-compressed bytes
+          cast rpc anvil_dumpState | sed 's/^0x//' | xxd -r -p | gunzip > anvil_states/defi_staking_state.json
+          jq -e . anvil_states/defi_staking_state.json > /dev/null
+          echo "Snapshot written to anvil_states/defi_staking_state.json"
+
+      - name: Stop Anvil (graceful)
+        run: |
+          kill -INT "$ANVIL_PID" || true
+          sleep 2
+
+      - name: Restart Anvil from snapshot
+        run: |
+          nohup anvil --port 8545 --load-state anvil_states/defi_staking_state.json > anvil_reload.log 2>&1 &
+          echo "ANVIL_PID=$!" >> $GITHUB_ENV
+          sleep 2
+
+      - name: Verify snapshot – node checks
+        env:
+          RPC: http://127.0.0.1:8545
+        run: |
+          cast chain-id --rpc-url "$RPC"
+          cast block-number --rpc-url "$RPC"
+
+      - name: Verify snapshot – contract bytecode exists
+        env:
+          RPC: http://127.0.0.1:8545
+        run: |
+          test -n "$DSC" && test -n "$POOL"
+          CODE_DSC=$(cast code "$DSC"  --rpc-url "$RPC")
+          CODE_POOL=$(cast code "$POOL" --rpc-url "$RPC")
+          if [ "$CODE_DSC" = "0x" ] || [ "$CODE_POOL" = "0x" ]; then
+            echo "Missing bytecode for DSC or POOL"; exit 1
+          fi
+
+      - name: Verify snapshot – state relations
+        env:
+          RPC: http://127.0.0.1:8545
+        run: |
+          # DSPool.dsc() should equal DSC
+          GOT_DSC=$(cast call "$POOL" 'dsc()(address)' --rpc-url "$RPC")
+          if [ "${GOT_DSC,,}" != "${DSC,,}" ]; then
+            echo "Mismatch: DSPool.dsc()=$GOT_DSC expected=$DSC"; exit 1
+          fi
+          # DSC.owner() should be the pool (per your deploy script)
+          OWNER=$(cast call "$DSC" 'owner()(address)' --rpc-url "$RPC")
+          if [ "${OWNER,,}" != "${POOL,,}" ]; then
+            echo "Mismatch: DSC.owner()=$OWNER expected=$POOL"; exit 1
+          fi
+          echo "Snapshot verified OK ✅"
+
+      - name: Upload snapshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anvil_snapshot
+          path: anvil_states/defi_staking_state.json
+
+      - name: Show Anvil logs on failure
+        if: failure()
+        run: |
+          echo "===== anvil.log ====="
+          tail -n +1 anvil.log || true
+          echo "===== anvil_reload.log ====="
+          tail -n +1 anvil_reload.log || true    
