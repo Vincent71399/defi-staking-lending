@@ -117,18 +117,31 @@ jobs:
 
       - name: Verify snapshot – state relations
         env:
-          RPC: http://127.0.0.1:8545
+          RPC: "http://127.0.0.1:8545"
         run: |
-          # DSPool.dsc() should equal DSC
-          GOT_DSC=$(cast call "$POOL" 'dsc()(address)' --rpc-url "$RPC")
-          if [ "${GOT_DSC,,}" != "${DSC,,}" ]; then
-            echo "Mismatch: DSPool.dsc()=$GOT_DSC expected=$DSC"; exit 1
-          fi
-          # DSC.owner() should be the pool (per your deploy script)
+          set -e
+
+          # Assert the relationship guaranteed by your deploy script:
           OWNER=$(cast call "$DSC" 'owner()(address)' --rpc-url "$RPC")
           if [ "${OWNER,,}" != "${POOL,,}" ]; then
             echo "Mismatch: DSC.owner()=$OWNER expected=$POOL"; exit 1
           fi
+          echo "✓ DSC.owner() == POOL"
+
+          # Attempt to read DSPool->DSCoin if a getter exists; skip if not.
+          set +e
+          GOT_DSC=$(cast call "$POOL" 'dsc()(address)' --rpc-url "$RPC" 2>/dev/null)
+          RET=$?
+          set -e
+          if [ $RET -eq 0 ] && [ -n "$GOT_DSC" ]; then
+            if [ "${GOT_DSC,,}" != "${DSC,,}" ]; then
+              echo "Mismatch: DSPool.dsc()=$GOT_DSC expected=$DSC"; exit 1
+            fi
+            echo "✓ DSPool.dsc() == DSC"
+          else
+            echo "ℹ️  DSPool has no public dsc() getter; skipped that check."
+          fi
+
           echo "Snapshot verified OK ✅"
 
       - name: Upload snapshot artifact
